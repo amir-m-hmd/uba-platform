@@ -1,0 +1,456 @@
+version: '3.8'
+
+networks:
+  uba_network:
+    name: uba_network
+    driver: bridge
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL - Metadata Store
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: docker.arvancloud.ir/library/postgres:16-alpine
+    container_name: uba_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    mem_limit: 512M
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./config/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - uba_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Redpanda - High-Performance Streaming Buffer (Kafka API Compatible)
+  # ---------------------------------------------------------------------------
+  redpanda:
+    image: docker.arvancloud.ir/redpandadata/redpanda:v24.1.8
+    container_name: uba_redpanda
+    restart: always
+    command:
+      - redpanda start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr 0.0.0.0:8082
+      - --advertise-pandaproxy-addr redpanda:8082
+      - --smp 1
+      - --memory 768M
+      - --reserve-memory 0M
+      - --overprovisioned
+    ports:
+      - "${REDPANDA_KAFKA_PORT}:9092"
+      - "19092:19092"
+      - "8081:8081"
+      - "8082:8082"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    networks:
+      - uba_network
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster info || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Redpanda Console - UI for Redpanda/Kafka Monitoring
+  # ---------------------------------------------------------------------------
+  redpanda-console:
+    image: docker.arvancloud.ir/redpandadata/console:v2.6.0
+    container_name: uba_redpanda_console
+    restart: always
+    entrypoint: /bin/sh -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml && /app/console --config.filepath=/tmp/config.yml"
+    environment:
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["redpanda:9092"]
+        redpanda:
+          adminApi:
+            enabled: true
+            urls: ["http://redpanda:9644"]
+    ports:
+      - "${REDPANDA_CONSOLE_PORT}:8080"
+    networks:
+      - uba_network
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # ClickHouse - Real-Time OLAP Data Warehouse
+  # ---------------------------------------------------------------------------
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3-alpine
+    container_name: uba_clickhouse
+    restart: always
+    ports:
+      - "${CLICKHOUSE_HTTP_PORT}:8123"
+      - "${CLICKHOUSE_NATIVE_PORT}:9000"
+      - "9363:9363" # Prometheus Metrics Port
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+     - clickhouse_data:/var/lib/clickhouse
+     - ./config/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql
+     - ./config/clickhouse/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml
+     - ./config/clickhouse/listen.xml:/etc/clickhouse-server/config.d/listen.xml
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    mem_limit: 1G
+    networks:
+      - uba_network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  # ---------------------------------------------------------------------------
+  # Python Fake Data Generator
+  # ---------------------------------------------------------------------------
+  event-generator:
+    build:
+      context: ./generator
+      dockerfile: Dockerfile
+    container_name: uba_event_generator
+    restart: always
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "redpanda:9092"
+      TOPIC_NAME: "user_events"
+      EVENTS_PER_SECOND: "5.0"
+    networks:
+      - uba_network
+    depends_on:
+      redpanda:
+        condition: service_healthy
+   # ---------------------------------------------------------------------------
+  # Apache Spark - Cluster Master (UI on http://localhost:8085)
+  # ---------------------------------------------------------------------------
+  spark-master:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    container_name: uba_spark_master
+    restart: always
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    ports:
+      - "8085:8080" # Spark Master Web UI
+      - "7077:7077" # Spark Master Port
+    volumes:
+      - ./spark-apps:/opt/spark-apps
+      - iceberg_warehouse:/tmp/iceberg_warehouse
+    networks:
+      - uba_network 
+    mem_limit: 1G
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ---------------------------------------------------------------------------
+  # Apache Spark - Cluster Worker (UI on http://localhost:8081)
+  # ---------------------------------------------------------------------------
+  spark-worker:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    container_name: uba_spark_worker
+    restart: always
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    mem_limit: 1G
+    environment:
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: 1g
+    ports:
+      - "8086:8081" # Spark Worker Web UI
+    volumes:
+      - ./spark-apps:/opt/spark-apps
+      - iceberg_warehouse:/tmp/iceberg_warehouse
+    networks:
+      - uba_network
+    depends_on:
+      - spark-master
+
+  # ---------------------------------------------------------------------------
+  # Apache Spark - Streaming Application Submitter
+  # ---------------------------------------------------------------------------
+  spark-processor:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    container_name: uba_spark_processor
+    restart: always
+    command: bash /app/submit.sh 
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "redpanda:9092"
+      KAFKA_TOPIC: "user_events"
+      POSTGRES_URL: "jdbc:postgresql://postgres:5432/uba_metadata"
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      CLICKHOUSE_URL: "jdbc:clickhouse://clickhouse:8123/uba_analytics"
+      CLICKHOUSE_USER: "${CLICKHOUSE_USER}"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD}"
+    volumes:
+      - ./spark/spark_streaming.py:/app/spark_streaming.py
+      - ./spark/submit.sh:/app/submit.sh
+      - iceberg_warehouse:/tmp/iceberg_warehouse
+      - ./spark-apps:/opt/spark-apps
+    networks:
+      - uba_network
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      spark-master:
+        condition: service_started
+    mem_limit: 1G
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+  # ---------------------------------------------------------------------------
+  # DuckDB - Ad-hoc Lakehouse Analytics Service
+  # ---------------------------------------------------------------------------
+  duckdb-analytics:
+    build:
+      context: ./analytics
+      dockerfile: Dockerfile
+    container_name: uba_duckdb_analytics
+    restart: "no" # Runs on demand or via Airflow
+    environment:
+      ICEBERG_WAREHOUSE_PATH: "/tmp/iceberg_warehouse"
+    volumes:
+      - iceberg_warehouse:/tmp/iceberg_warehouse
+      - ./analytics:/app
+    networks:
+      - uba_network
+    depends_on:
+      - spark-processor
+  # ---------------------------------------------------------------------------
+  # Airflow Init - One-time Migration & Admin Setup
+  # ---------------------------------------------------------------------------
+  airflow-init:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: uba_airflow_init
+    entrypoint: ["bash", "/app/script/entrypoint.sh", "init"]
+    environment:
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow_metadata
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/config:/opt/airflow/config
+      - ./airflow/script/entrypoint.sh:/app/script/entrypoint.sh
+    networks:
+      - uba_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Airflow Webserver - Dashboard UI (http://localhost:8082)
+  # ---------------------------------------------------------------------------
+  airflow-webserver:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: uba_airflow_webserver
+    restart: always
+    entrypoint: ["bash", "/app/script/entrypoint.sh", "webserver"]
+    ports:
+      - "8091:8080"
+    environment:
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow_metadata
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__WEBSERVER__SECRET_KEY=uba_airflow_secret_key_2026
+      # اتصالات خودکار (Automated Connections)
+      - AIRFLOW_CONN_POSTGRES_DEFAULT=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - AIRFLOW_CONN_SPARK_DEFAULT=spark://spark-master:7077
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/config:/opt/airflow/config
+      - ./airflow/script/entrypoint.sh:/app/script/entrypoint.sh
+    networks:
+      - uba_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+  # ---------------------------------------------------------------------------
+  # Airflow Scheduler - Task Execution Engine
+  # ---------------------------------------------------------------------------
+  airflow-scheduler:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: uba_airflow_scheduler
+    restart: always
+    entrypoint: ["bash", "/app/script/entrypoint.sh", "scheduler"]
+    environment:
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow_metadata
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW_CONN_POSTGRES_DEFAULT=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - AIRFLOW_CONN_SPARK_DEFAULT=spark://spark-master:7077
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/config:/opt/airflow/config
+      - ./airflow/script/entrypoint.sh:/app/script/entrypoint.sh
+    networks:
+      - uba_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+  # ---------------------------------------------------------------------------
+  # Node Exporter - Host Infrastructure Metrics (CPU, RAM, Disk)
+  # ---------------------------------------------------------------------------
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: uba_node_exporter
+    restart: always
+    ports:
+      - "9100:9100"
+    networks:
+      - uba_network
+
+  # ---------------------------------------------------------------------------
+  # cAdvisor - Cross-Platform Container Resource Exporter
+  # ---------------------------------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.2
+    container_name: uba_cadvisor
+    restart: always
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    # devices:
+    #   - /dev/kmsg # Disabled for Mac/Windows compatibility
+    networks:
+      - uba_network
+
+  # ---------------------------------------------------------------------------
+  # Prometheus - Metrics Aggregator & Time Series Database
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: docker.arvancloud.ir/prom/prometheus:v2.51.0
+    container_name: uba_prometheus
+    restart: always
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - uba_network
+
+  # ---------------------------------------------------------------------------
+  # Grafana - Infrastructure & Analytics Dashboards (UI on http://localhost:3000)
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: docker.arvancloud.ir/grafana/grafana:10.4.1
+    container_name: uba_grafana
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin_pass_2026
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - uba_network
+    depends_on:
+      - prometheus
+
+  # ---------------------------------------------------------------------------
+  # Apache Superset - Business Intelligence Dashboard (UI on http://localhost:8088)
+  # ---------------------------------------------------------------------------
+
+
+  superset:
+    build:
+      context: ./monitoring/superset
+      dockerfile: Dockerfile
+    container_name: uba_superset
+
+    restart: always
+
+    entrypoint:
+      - bash
+      - /app/entrypoint.sh
+
+    ports:
+      - "8088:8088"
+
+    environment:
+      SUPERSET_SECRET_KEY: "uba_superset_secret_key_2026"
+      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${SUPERSET_DB}
+      SUPERSET_LOAD_EXAMPLES: "false"
+
+    volumes:
+      - ./monitoring/superset/entrypoint.sh:/app/entrypoint.sh
+      - superset_home:/app/superset_home
+      - ./superset:/app/docker
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    mem_limit: 1G
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+
+    networks:
+      - uba_network 
+  # ---------------------------------------------------------------------------
+  # Blackbox Exporter - HTTP / Endpoint Health Probe
+  # ---------------------------------------------------------------------------
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    container_name: uba_blackbox_exporter
+    restart: always
+    ports:
+      - "9115:9115"
+    networks:
+      - uba_network
+volumes:
+  postgres_data:
+  clickhouse_data:
+  redpanda_data:
+  iceberg_warehouse:
+  prometheus_data:
+  superset_home:
