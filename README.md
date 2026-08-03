@@ -108,7 +108,7 @@ Once the environment is running, access the web UIs using the following links:
  * Docker Engine >= 24.0
  * Docker Compose >= 2.20
  * At least 8 GB allocated RAM for Docker
-### Environment Configuration
+## Environment Configuration
 
 Before starting the platform, create your local environment file:
 
@@ -116,24 +116,34 @@ Before starting the platform, create your local environment file:
 cp .env.example .env
 ```
 
-Review and update the environment variables based on your local environment.
+Review and update the environment variables according to your local environment.
 
-The .env file contains local configuration values and credentials.
-It is excluded from version control using .gitignore.
-### Installation & Deployment
- 1. **Clone the repository:**
-   bash
-   git clone [https://github.com/your-username/uba-platform.git](https://github.com/your-username/uba-platform.git)
-   cd uba-platform
-   
-    2. **Start all infrastructure services:**
-   bash
-   docker compose up -d
-   
-    3. **Initialize Superset Database & Admin User:**
-   bash
-   docker exec -it uba_superset superset db upgrade
-   docker exec -it uba_superset superset init
+> **Note:** The `.env` file contains local configuration values and credentials. It is excluded from version control through `.gitignore` and should **never** be committed to the repository.
+
+---
+
+# Installation & Deployment
+
+## 1. Clone the repository
+
+```bash
+git clone https://github.com/amir-m-hmd/uba-platform.git
+cd uba-platform
+```
+
+## 2. Start all infrastructure services
+
+```bash
+docker compose up -d
+```
+
+## 3. Initialize the Superset database and create the admin user
+
+```bash
+docker exec -it uba_superset superset db upgrade
+docker exec -it uba_superset superset init
+```
+
    
    ## 🧪 Verification & Demo Scenario
 To verify the live data flow across the pipeline:
