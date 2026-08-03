@@ -9,15 +9,12 @@ import config
 fake = Faker()
 
 def delivery_report(err, msg):
-    """Callback triggered on event delivery result."""
     if err is not None:
-        print(f"❌ Message delivery failed: {err}")
+        print(f" Message delivery failed: {err}")
     else:
-        # Avoid heavy log output in production, useful for debugging
         pass
 
 def generate_event() -> dict:
-    """Generates a realistic User Behavior Analytics Event."""
     user_id = random.choice(config.USER_IDS)
     event_type = random.choices(config.EVENT_TYPES, weights=config.EVENT_WEIGHTS)[0]
     
@@ -40,13 +37,13 @@ def generate_event() -> dict:
     return event
 
 def main():
-    print(f"🚀 Starting Event Generator targetting broker: {config.KAFKA_BOOTSTRAP_SERVERS}")
-    print(f"📦 Streaming events to topic: '{config.TOPIC_NAME}'")
+    print(f"Starting Event Generator targetting broker: {config.KAFKA_BOOTSTRAP_SERVERS}")
+    print(f"Streaming events to topic: '{config.TOPIC_NAME}'")
 
     producer_conf = {
         'bootstrap.servers': config.KAFKA_BOOTSTRAP_SERVERS,
         'client.id': 'uba-data-generator',
-        'acks': 'all',  # Guarantee message delivery
+        'acks': 'all', 
         'retries': 5
     }
 
@@ -58,7 +55,6 @@ def main():
             event = generate_event()
             payload = json.dumps(event).encode('utf-8')
             
-            # Keying by user_id ensures order per user in Redpanda partitions
             producer.produce(
                 topic=config.TOPIC_NAME,
                 key=event["user_id"].encode('utf-8'),
@@ -66,18 +62,17 @@ def main():
                 on_delivery=delivery_report
             )
             
-            # Serve callbacks for delivery reports
             producer.poll(0)
             
             count += 1
             if count % 20 == 0:
-                print(f"✅ Generated and sent {count} events so far... (Latest: {event['event_type']} by {event['user_id']})")
+                print(f"Generated and sent {count} events so far... (Latest: {event['event_type']} by {event['user_id']})")
                 producer.flush()
                 
             time.sleep(1.0 / config.EVENTS_PER_SECOND)
 
     except KeyboardInterrupt:
-        print("\n🛑 Stopping Data Generator...")
+        print("\n Stopping Data Generator...")
     finally:
         print("Flushing remaining messages...")
         producer.flush()

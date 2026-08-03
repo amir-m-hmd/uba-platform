@@ -12,16 +12,14 @@ def run_duckdb_analysis():
     
     con = duckdb.connect(database=':memory:')
 
-    # Smart Extension Loader: Load directly if installed, fallback to install
     try:
         con.execute("LOAD iceberg;")
     except Exception:
-        print("🌐 Installing Iceberg extension for the first time...")
+        print(" Installing Iceberg extension for the first time...")
         con.execute("INSTALL iceberg; LOAD iceberg;")
 
-    print(f"📂 Reading Iceberg Table Metadata from: {TABLE_PATH}")
+    print(f" Reading Iceberg Table Metadata from: {TABLE_PATH}")
 
-    # Query 1: True Iceberg Scan using iceberg_scan()
     try:
         print("\n=== [DuckDB Query 1] Event Summary via True Iceberg Scan ===")
         con.execute("SET unsafe_enable_version_guessing = true;")
@@ -39,7 +37,7 @@ def run_duckdb_analysis():
         print(result_df.to_string(index=False))
 
     except Exception as e:
-        print(f"⚠️ Iceberg Scan Note/Error: {e}")
+        print(f" Iceberg Scan Note/Error: {e}")
 
 if __name__ == "__main__":
     time.sleep(2)

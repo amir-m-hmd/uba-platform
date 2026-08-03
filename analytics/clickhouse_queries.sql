@@ -1,4 +1,3 @@
--- 1. Total Events & Unique Users per Event Type
 SELECT 
     event_type,
     count() AS total_events,
@@ -7,8 +6,6 @@ SELECT
 FROM uba_analytics.user_events_enriched
 GROUP BY event_type
 ORDER BY total_events DESC;
-
--- 2. User Activity Breakdown by Device & Country (Enriched Metadata Analysis)
 SELECT 
     country,
     device_type,
@@ -18,8 +15,6 @@ FROM uba_analytics.user_events_enriched
 WHERE country IS NOT NULL
 GROUP BY country, device_type
 ORDER BY event_count DESC;
-
--- 3. Top Converting Premium Users Funnel (Cart vs Checkout)
 SELECT 
     username,
     email,

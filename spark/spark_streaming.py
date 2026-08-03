@@ -3,7 +3,6 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import from_json, col, current_timestamp
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType
 
-# Configuration Variables
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "redpanda:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "user_events")
 
@@ -76,7 +75,6 @@ def process_batch(df, batch_id):
 
     spark = df.sparkSession
     
-    # 1. Fetch Metadata from PostgreSQL
     try:
         users_df = spark.read \
             .format("jdbc") \
@@ -87,10 +85,9 @@ def process_batch(df, batch_id):
             .option("driver", "org.postgresql.Driver") \
             .load()
     except Exception as e:
-        print(f"❌ Failed to fetch Postgres Metadata in batch {batch_id}: {e}")
+        print(f" Failed to fetch Postgres Metadata in batch {batch_id}: {e}")
         return
 
-    # 2. Join Stream with Metadata
     enriched_df = df.join(users_df, "user_id", "left") \
         .select(
             col("event_id"),
@@ -115,7 +112,6 @@ def process_batch(df, batch_id):
 
     enriched_df.persist()
 
-    # 3. Sink A: ClickHouse DW
     try:
         enriched_df.write \
             .format("jdbc") \
@@ -129,13 +125,12 @@ def process_batch(df, batch_id):
             .mode("append") \
             .save()
     except Exception as e:
-        print(f"⚠️ ClickHouse Sink Error (Batch {batch_id}): {e}")
+        print(f" ClickHouse Sink Error (Batch {batch_id}): {e}")
 
-    # 4. Sink B: Apache Iceberg Lakehouse
     try:
         enriched_df.writeTo("demo.uba_db.user_events_lakehouse").append()
     except Exception as e:
-        print(f"⚠️ Iceberg Lakehouse Sink Error (Batch {batch_id}): {e}")
+        print(f" Iceberg Lakehouse Sink Error (Batch {batch_id}): {e}")
 
     enriched_df.unpersist()
 
@@ -143,10 +138,10 @@ def main():
     spark = create_spark_session()
     spark.sparkContext.setLogLevel("WARN")
     
-    print("⚡ Initializing Apache Iceberg Table...")
+    print(" Initializing Apache Iceberg Table...")
     init_iceberg_table(spark)
 
-    print("⚡ Starting Spark Structured Streaming Consumer...")
+    print(" Starting Spark Structured Streaming Consumer...")
     kafka_stream = spark.readStream \
         .format("kafka") \
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS) \

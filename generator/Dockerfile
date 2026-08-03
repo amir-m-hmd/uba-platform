@@ -2,7 +2,6 @@ FROM docker.arvancloud.ir/library/python:3.11-slim
 
 WORKDIR /app
 
-# Install system build dependencies for librdkafka
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libc-dev \

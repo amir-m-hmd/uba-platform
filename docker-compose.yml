@@ -180,7 +180,7 @@ services:
       SPARK_WORKER_CORES: 2
       SPARK_WORKER_MEMORY: 1g
     ports:
-      - "8086:8081" # Spark Worker Web UI
+      - "8086:8081"
     volumes:
       - ./spark-apps:/opt/spark-apps
       - iceberg_warehouse:/tmp/iceberg_warehouse
@@ -237,7 +237,7 @@ services:
       context: ./analytics
       dockerfile: Dockerfile
     container_name: uba_duckdb_analytics
-    restart: "no" # Runs on demand or via Airflow
+    restart: "no"
     environment:
       ICEBERG_WAREHOUSE_PATH: "/tmp/iceberg_warehouse"
     volumes:
@@ -288,7 +288,6 @@ services:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - AIRFLOW__WEBSERVER__SECRET_KEY=uba_airflow_secret_key_2026
-      # اتصالات خودکار (Automated Connections)
       - AIRFLOW_CONN_POSTGRES_DEFAULT=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       - AIRFLOW_CONN_SPARK_DEFAULT=spark://spark-master:7077
     volumes:
@@ -355,8 +354,6 @@ services:
       - /var/run:/var/run:ro
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
-    # devices:
-    #   - /dev/kmsg # Disabled for Mac/Windows compatibility
     networks:
       - uba_network
 

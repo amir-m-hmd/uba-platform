@@ -22,20 +22,17 @@ with DAG(
     tags=['lakehouse', 'maintenance', 'clickhouse', 'postgres'],
 ) as dag:
 
-    # ۱. تست سلامت اتصال به دیتابیس متادیتای PostgreSQL
     check_postgres_health = PostgresOperator(
         task_id='check_postgres_health',
         postgres_conn_id='postgres_default',
         sql='SELECT 1;',
     )
 
-    # ۲. فشرده‌سازی و بهینه‌سازی جداول ClickHouse
     optimize_clickhouse_tables = BashOperator(
         task_id='optimize_clickhouse_tables',
         bash_command='curl -s "http://clickhouse:8123/?query=OPTIMIZE+TABLE+uba_analytics.user_events_enriched+FINAL;"',
     )
 
-    # ۳. ثبت لاگ اتمام موفقیت‌آمیز
     log_maintenance_completion = BashOperator(
         task_id='log_maintenance_completion',
         bash_command='echo "✅ Lakehouse Daily Maintenance Finished Successfully at $(date)"',

@@ -20,10 +20,8 @@ RUN curl -fSL "https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spar
 
 WORKDIR ${SPARK_HOME}/jars
 
-# PostgreSQL JDBC Driver
 RUN curl -O https://jdbc.postgresql.org/download/postgresql-42.7.3.jar
 
-# ClickHouse JDBC Driver
 RUN curl -O https://repo1.maven.org/maven2/com/clickhouse/clickhouse-jdbc/0.6.0/clickhouse-jdbc-0.6.0-all.jar
 
 WORKDIR /app
